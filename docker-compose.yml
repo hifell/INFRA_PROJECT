@@ -5,12 +5,17 @@ x-airflow-common: &airflow-common
     dockerfile: Dockerfile
   env_file:
     - .env.airflow
+  environment:
+    CASSANDRA_HOST: cassandra
+    CASSANDRA_PORT: 9042
+    SPARK_MASTER_URL: spark://spark-master:7077
   volumes:
     - ./dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
     - ./MODEL:/opt/airflow/MODEL
     - ./DATA:/opt/airflow/DATA
     - ./config:/opt/airflow/config
+    - ./logs:/opt/airflow/logs_pipeline
     - airflow_logs:/opt/airflow/logs
   depends_on:
     postgres-airflow:
@@ -28,6 +33,11 @@ services:
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ============================================================
   # KAFKA — Message Broker untuk streaming data OHLCV
@@ -36,18 +46,24 @@ services:
     image: confluentinc/cp-kafka:7.4.0
     container_name: crypto_kafka
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      # PENTING: Jika Worker Laptop gagal terkoneksi, ubah 'localhost' di bawah ini menjadi IP LAN dari Laptop Master (misal: 192.168.1.10)
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://192.168.1.10:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
 
   # ============================================================
   # CASSANDRA — Database NoSQL untuk penyimpanan data OHLCV
@@ -61,10 +77,58 @@ services:
       - CASSANDRA_CLUSTER_NAME=CryptoCluster
     volumes:
       - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
 
   # ============================================================
-  # KAFKA CONSUMER — Service yang selalu hidup (standby)
-  # Mendengarkan topik Kafka dan menyimpan data ke Cassandra
+  # SPARK MASTER — Node Master Spark (single-laptop mode)
+  # UI: http://localhost:8081
+  # ============================================================
+  spark-master:
+    image: bitnami/spark:3.4
+    container_name: crypto_spark_master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    volumes:
+      - ./src:/opt/bitnami/spark/src
+      - ./MODEL:/opt/bitnami/spark/MODEL
+      - ./DATA:/opt/bitnami/spark/DATA
+
+  # ============================================================
+  # SPARK WORKER — Node Worker Spark (1 worker, single-laptop)
+  # ============================================================
+  spark-worker:
+    image: bitnami/spark:3.4
+    container_name: crypto_spark_worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+    volumes:
+      - ./src:/opt/bitnami/spark/src
+      - ./MODEL:/opt/bitnami/spark/MODEL
+      - ./DATA:/opt/bitnami/spark/DATA
+
+  # ============================================================
+  # KAFKA CONSUMER — Streaming: Kafka → Cassandra (always-on)
   # ============================================================
   kafka-consumer:
     build:
@@ -72,20 +136,91 @@ services:
       dockerfile: Dockerfile
     container_name: crypto_kafka_consumer
     depends_on:
-      - kafka
-      - cassandra
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CASSANDRA_HOST: cassandra
       CASSANDRA_PORT: 9042
     volumes:
       - ./src:/opt/airflow/src
+      - ./logs:/opt/airflow/logs_pipeline
     command: python -m src.storage.kafka_to_cassandra
     restart: always
 
   # ============================================================
+  # HEALTH CHECK SERVICE — Prometheus metrics exporter (port 8000)
+  # ============================================================
+  health-check:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto_health_check
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    environment:
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+      HEALTH_PORT: 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/opt/airflow/src
+      - ./monitoring:/opt/airflow/monitoring
+      - ./logs:/opt/airflow/logs_pipeline
+    command: python /opt/airflow/monitoring/health_check.py
+    restart: always
+
+  # ============================================================
+  # PROMETHEUS — Metrics scraper
+  # UI: http://localhost:9090
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: crypto_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    restart: always
+
+  # ============================================================
+  # GRAFANA — Dashboard monitoring + Alerting
+  # UI: http://localhost:3000 | Login: admin / admin
+  # ============================================================
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: crypto_grafana
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ALERTING_ENABLED: "true"
+      GF_UNIFIED_ALERTING_ENABLED: "true"
+      # Kirim alert via Telegram
+      GF_SMTP_ENABLED: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    restart: always
+
+  # ============================================================
   # POSTGRESQL AIRFLOW — Metadata store internal Airflow
-  # (BUKAN database Supabase Anda)
   # ============================================================
   postgres-airflow:
     image: postgres:15
@@ -105,7 +240,7 @@ services:
       retries: 5
 
   # ============================================================
-  # AIRFLOW INIT — One-time setup (migrasi DB + create admin user)
+  # AIRFLOW INIT — One-time setup
   # ============================================================
   airflow-init:
     <<: *airflow-common
@@ -117,7 +252,6 @@ services:
 
   # ============================================================
   # AIRFLOW WEBSERVER — Web UI Monitoring (port 8080)
-  # Login: admin / admin
   # ============================================================
   airflow-webserver:
     <<: *airflow-common
@@ -151,3 +285,5 @@ volumes:
   cassandra_data:
   postgres_airflow_data:
   airflow_logs:
+  prometheus_data:
+  grafana_data:

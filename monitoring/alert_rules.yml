@@ -1,0 +1,70 @@
+groups:
+  - name: pipeline_alerts
+    interval: 30s
+    rules:
+
+      # ── Alert: Cassandra tidak bisa diakses ──────────────────────────────
+      - alert: CassandraDown
+        expr: pipeline_cassandra_rows_total == -1
+        for: 2m
+        labels:
+          severity: critical
+          component: cassandra
+        annotations:
+          summary: "Cassandra tidak dapat diakses"
+          description: "Tidak bisa terhubung ke Cassandra selama lebih dari 2 menit. Periksa container crypto_cassandra."
+
+      # ── Alert: Data stale (tidak ada ingest > 3 jam) ─────────────────────
+      - alert: DataStale
+        expr: (time() - pipeline_last_ingest_timestamp) > 10800
+        for: 5m
+        labels:
+          severity: warning
+          component: kafka_producer
+        annotations:
+          summary: "Data crypto tidak diperbarui ({{ $labels.token }})"
+          description: "Token {{ $labels.token }} tidak menerima data baru selama lebih dari 3 jam. Periksa Kafka Producer."
+
+      # ── Alert: Baris Cassandra terlalu sedikit ────────────────────────────
+      - alert: InsufficientData
+        expr: pipeline_cassandra_rows_total < 100
+        for: 10m
+        labels:
+          severity: warning
+          component: ingestion
+        annotations:
+          summary: "Data tidak cukup untuk training ({{ $labels.token }})"
+          description: "Token {{ $labels.token }} hanya memiliki {{ $value }} baris di Cassandra. Minimal 100 baris diperlukan untuk training XGBoost."
+
+      # ── Alert: Error pipeline tinggi ──────────────────────────────────────
+      - alert: HighErrorRate
+        expr: rate(pipeline_errors_total[5m]) > 0.5
+        for: 3m
+        labels:
+          severity: critical
+          component: "{{ $labels.component }}"
+        annotations:
+          summary: "Error rate tinggi di komponen {{ $labels.component }}"
+          description: "Komponen {{ $labels.component }} mengalami lebih dari 0.5 error/detik dalam 5 menit terakhir."
+
+      # ── Alert: Data Quality Score rendah ─────────────────────────────────
+      - alert: LowDataQuality
+        expr: pipeline_data_quality_score < 90
+        for: 5m
+        labels:
+          severity: warning
+          component: governance
+        annotations:
+          summary: "Kualitas data rendah untuk {{ $labels.token }}"
+          description: "Skor kualitas data {{ $labels.token }} turun ke {{ $value }}% (batas minimum: 90%). Kemungkinan ada masalah di sumber data."
+
+      # ── Alert: Model belum dilatih ulang > 25 jam ─────────────────────────
+      - alert: ModelNotRetrained
+        expr: (time() - pipeline_model_train_duration_seconds) > 90000
+        for: 1m
+        labels:
+          severity: warning
+          component: training
+        annotations:
+          summary: "Model XGBoost belum dilatih ulang ({{ $labels.token }})"
+          description: "Model untuk {{ $labels.token }} belum diperbarui dalam 25 jam terakhir. Pipeline training mungkin gagal."

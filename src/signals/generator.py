@@ -3,9 +3,18 @@ import requests
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 from src.features.feature_engineering import CryptoFeatureEngineer
 from src.models.predict_linear import CryptoInferenceEngine
 from src.ingestion.save_to_db import TradingDatabaseConnector
+from src.utils.logger import get_logger
+from src.governance.audit_trail import AuditContext, record_event
+
+# Load environment variables dari .env
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+logger = get_logger(__name__)
+
 
 class TradingSignalCenter:
     def __init__(self, model_dir: str = "MODEL"):
@@ -16,9 +25,11 @@ class TradingSignalCenter:
         self.inference = CryptoInferenceEngine(model_dir=model_dir)
         self.db = TradingDatabaseConnector()
 
-        # Kredensial Bot Telegram resmi berdasarkan token BotFather dan ID Grup Anda
-        self.telegram_token = "8801567080:AAE5Gh0-XhCvYNlLv-6tvpcOAZYJ6TBsw40"  # Sempurnakan token lengkap Anda di sini
-        self.telegram_chat_id = "-5267717165"
+        # Kredensial Bot Telegram — dibaca dari .env (TIDAK hardcoded)
+        self.telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        self.telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if not self.telegram_token:
+            logger.warning("[TradingSignalCenter] TELEGRAM_BOT_TOKEN tidak diset di .env. Alert Telegram dinonaktifkan.")
 
         # Threshold probabilitas minimal hasil prediksi model XGBoost untuk memicu sinyal
         self.confidence_thresholds = {"BTC": 0.51, "BNB": 0.51, "ETH": 0.52, "XRP": 0.52, "SOL": 0.53}
@@ -33,9 +44,15 @@ class TradingSignalCenter:
         }
 
     def send_telegram_notification(self, token: str, price: float, prob: float, tp: float, sl: float, time_str: str):
-        """Mengirimkan alert sinyal trading hasil prediksi model ML ke grup Telegram"""
+        """Mengirimkan alert sinyal trading hasil prediksi model ML ke grup Telegram.
+        Hanya berjalan jika TELEGRAM_BOT_TOKEN diset di .env.
+        """
+        if not self.telegram_token:
+            logger.warning(f"[ALERT] Telegram token tidak tersedia. Sinyal {token} tidak dikirim.")
+            return
+
         url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
-        
+
         message = (
             f"🔔 *ROB-SBD TRADING SIGNAL DETECTED* 🔔\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -49,7 +66,7 @@ class TradingSignalCenter:
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🤖 *Sent automatically by XGBoost Inference Engine*"
         )
-        
+
         payload = {
             "chat_id": self.telegram_chat_id,
             "text": message,

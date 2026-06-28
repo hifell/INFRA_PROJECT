@@ -1,0 +1,50 @@
+# ─── Secrets & Environment ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+venv/
+.venv/
+.Python
+*.egg-info/
+dist/
+build/
+
+# ─── Data & Model Files (besar, jangan di-commit) ────────────────────────────
+DATA/*.csv
+DATA/*.parquet
+DATA/*.json
+MODEL/*.json
+MODEL/*.pkl
+!MODEL/.gitkeep
+!DATA/.gitkeep
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ─── Docker volumes ──────────────────────────────────────────────────────────
+cassandra_data/
+postgres_airflow_data/
+prometheus_data/
+grafana_data/
+
+# ─── IDE ─────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Trigger files (legacy 2-laptop mode) ────────────────────────────────────
+DATA/trigger_*.txt
+DATA/train_success.txt
+DATA/train_failed.txt
+DATA/spark_success.flag

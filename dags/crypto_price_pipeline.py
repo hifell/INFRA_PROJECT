@@ -1,137 +1,131 @@
 """
-DAG: Pipeline Harga Crypto
-Jadwal: Setiap 1 jam (0 * * * *)
+DAG: Pipeline Harga Crypto (Stream + ML)
+Jadwal: Setiap 1 jam
 
-Mengorkestrasi pipeline utama:
-1. Kafka Producer — Tarik data harga terbaru dari Yahoo Finance, kirim ke Kafka
-2. Tunggu Consumer — Beri jeda 10 detik agar Consumer sempat menulis ke Cassandra
-3. Train Model — Latih ulang model XGBoost dengan data terbaru dari Cassandra
-4. Scan Signals — Jalankan scanner sinyal trading, kirim hasil ke DB & Telegram
+Flow:
+  1. Kafka Producer  → Tarik OHLCV terbaru dari Yahoo Finance, publish ke Kafka
+  2. Wait Consumer   → Beri jeda agar Consumer selesai tulis ke Cassandra
+  3. Data Quality    → Validasi kualitas data sebelum training
+  4. Train Model     → Latih ulang XGBoost via Spark (local[*] mode, single-laptop)
+  5. Scan Signals    → Inferensi XGBoost → simpan ke PostgreSQL + alert Grafana
 """
 
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
+from airflow.operators.python import PythonOperator
 
-# ============================================================
-# Default arguments untuk semua task dalam DAG ini
-# ============================================================
+
 default_args = {
     "owner": "rob-sbd",
     "depends_on_past": False,
     "email_on_failure": False,
     "email_on_retry": False,
     "retries": 2,
-    "retry_delay": timedelta(minutes=1),
+    "retry_delay": timedelta(minutes=2),
 }
 
-# ============================================================
-# Definisi DAG
-# ============================================================
 with DAG(
     dag_id="crypto_price_pipeline",
     default_args=default_args,
-    description="Pipeline utama: Kafka ingestion → XGBoost training → Signal scanning",
-    schedule_interval="0 * * * *",  # Setiap jam tepat
+    description="Stream pipeline: Kafka ingestion → Data Quality → XGBoost training → Signal scanning",
+    schedule_interval="0 * * * *",
     start_date=datetime(2026, 6, 23),
     catchup=False,
-    tags=["crypto", "pipeline", "production"],
+    tags=["crypto", "pipeline", "production", "stream"],
 ) as dag:
 
-    # ----------------------------------------------------------
-    # TASK 1: Jalankan Kafka Producer
-    # Menarik data OHLCV terbaru dari Yahoo Finance dan
-    # mempublish ke topik Kafka 'crypto_signals'
-    # ----------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────────────
+    # TASK 1: Kafka Producer
+    # Menarik data OHLCV terbaru dari Yahoo Finance dan publish ke Kafka
+    # ──────────────────────────────────────────────────────────────────────────
     kafka_producer_task = BashOperator(
         task_id="kafka_producer",
         bash_command="""
             export CASSANDRA_HOST=cassandra
             export CASSANDRA_PORT=9042
+            export KAFKA_BOOTSTRAP_SERVERS=kafka:29092
             cd /opt/airflow && python -m src.ingestion.kafka_producer
         """,
     )
 
-    # ----------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────────────
     # TASK 2: Tunggu Consumer memproses data
-    # Consumer (kafka_to_cassandra.py) berjalan sebagai service
-    # Docker terpisah yang selalu hidup. Task ini hanya memberi
-    # jeda waktu agar data sempat masuk ke Cassandra.
-    # ----------------------------------------------------------
+    # kafka-consumer service berjalan selalu. Ini hanya jeda sinkronisasi.
+    # ──────────────────────────────────────────────────────────────────────────
     wait_for_consumer = BashOperator(
         task_id="wait_for_consumer",
-        bash_command="echo '[*] Menunggu 10 detik agar Kafka Consumer selesai menulis ke Cassandra...' && sleep 10",
+        bash_command="echo '[*] Memberi jeda 15 detik agar Kafka Consumer selesai menulis ke Cassandra...' && sleep 15",
     )
 
-    # ----------------------------------------------------------
-    # TASK 3: Training ulang model XGBoost
-    # Membaca data terbaru dari Cassandra, melakukan feature
-    # engineering, dan melatih ulang model untuk setiap token.
-    # ----------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────────────
+    # TASK 3: Data Quality Check
+    # Memvalidasi data di Cassandra sebelum digunakan untuk training
+    # ──────────────────────────────────────────────────────────────────────────
+    data_quality_task = BashOperator(
+        task_id="data_quality_check",
+        bash_command="""
+            export CASSANDRA_HOST=cassandra
+            export CASSANDRA_PORT=9042
+            cd /opt/airflow && python -c "
+import sys
+sys.path.insert(0, '.')
+from cassandra.cluster import Cluster
+from src.governance.data_quality import check_dataframe_quality
+from src.models.train_model import load_token_from_cassandra
+from src.utils.logger import get_logger
+import pandas as pd
+
+logger = get_logger('airflow.dq_check')
+TOKENS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB']
+cluster = Cluster(['cassandra'], port=9042)
+session = cluster.connect('crypto_ks')
+all_pass = True
+for token in TOKENS:
+    df = load_token_from_cassandra(session, token)
+    if df.empty:
+        logger.warning(f'[{token}] Tidak ada data di Cassandra.')
+        continue
+    df_clean, report = check_dataframe_quality(df, token)
+    if not report['passed']:
+        logger.error(f'[{token}] DQ GAGAL: {report[\"issues\"]}')
+        all_pass = False
+cluster.shutdown()
+sys.exit(0 if all_pass else 1)
+"
+        """,
+    )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # TASK 4: Training XGBoost via Spark (single-laptop, local mode)
+    # Menghapus logika file trigger — langsung jalankan di container Airflow
+    # ──────────────────────────────────────────────────────────────────────────
     train_model_task = BashOperator(
         task_id="train_model",
         bash_command="""
-            echo "[*] Mengirim trigger ke Laptop 1 (Windows Host) untuk menjalankan Spark Cluster..."
-            touch /opt/airflow/DATA/trigger_train.txt
-            
-            echo "[*] Menunggu proses Distributed Spark selesai di host..."
-            # Looping selama file trigger masih ada (artinya daemon di host sedang bekerja)
-            while [ -f /opt/airflow/DATA/trigger_train.txt ]; do
-                sleep 5
-            done
-            
-            # Cek hasil dari daemon host
-            if [ -f /opt/airflow/DATA/train_success.txt ]; then
-                echo "[+] Distributed Spark training sukses!"
-                rm /opt/airflow/DATA/train_success.txt
-                exit 0
-            elif [ -f /opt/airflow/DATA/train_failed.txt ]; then
-                echo "[-] Distributed Spark training gagal!"
-                rm /opt/airflow/DATA/train_failed.txt
-                exit 1
-            else
-                echo "[-] Proses selesai tapi tidak ada sinyal sukses/gagal. Asumsikan error."
-                exit 1
-            fi
+            export CASSANDRA_HOST=cassandra
+            export CASSANDRA_PORT=9042
+            export SPARK_MASTER_URL=local[*]
+            cd /opt/airflow && python -m src.models.train_model
         """,
-        # Training bisa memakan waktu lama
         execution_timeout=timedelta(minutes=45),
     )
 
-    # ----------------------------------------------------------
-    # TASK 4: Scan sinyal trading
-    # Menjalankan inferensi model terhadap data terkini,
-    # menyimpan hasil ke PostgreSQL (Supabase), dan mengirim
-    # notifikasi ke Telegram jika ada sinyal.
-    # ----------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────────────
+    # TASK 5: Scan sinyal trading
+    # Inferensi model → simpan ke PostgreSQL → kirim notifikasi via Grafana
+    # ──────────────────────────────────────────────────────────────────────────
     scan_signals_task = BashOperator(
         task_id="scan_signals",
         bash_command="""
-            echo "[*] Mengirim trigger ke Windows Host untuk menjalankan Scan Signals (bypassing IPv6 Docker limit)..."
-            touch /opt/airflow/DATA/trigger_scan.txt
-            
-            echo "[*] Menunggu proses Scan Signals selesai di host..."
-            while [ -f /opt/airflow/DATA/trigger_scan.txt ]; do
-                sleep 5
-            done
-            
-            if [ -f /opt/airflow/DATA/train_success.txt ]; then
-                echo "[+] Scan signals sukses!"
-                rm /opt/airflow/DATA/train_success.txt
-                exit 0
-            elif [ -f /opt/airflow/DATA/train_failed.txt ]; then
-                echo "[-] Scan signals gagal!"
-                rm -f /opt/airflow/DATA/train_failed.txt
-                exit 1
-            else
-                echo "[-] Proses selesai tapi tidak ada sinyal sukses/gagal. Asumsikan error."
-                exit 1
-            fi
+            export CASSANDRA_HOST=cassandra
+            export CASSANDRA_PORT=9042
+            cd /opt/airflow && python -m src.signals.generator
         """,
         execution_timeout=timedelta(minutes=15),
     )
 
-    # ----------------------------------------------------------
-    # Dependency chain (urutan eksekusi)
-    # ----------------------------------------------------------
-    kafka_producer_task >> wait_for_consumer >> train_model_task >> scan_signals_task
+    # ──────────────────────────────────────────────────────────────────────────
+    # Dependency chain
+    # ──────────────────────────────────────────────────────────────────────────
+    kafka_producer_task >> wait_for_consumer >> data_quality_task >> train_model_task >> scan_signals_task

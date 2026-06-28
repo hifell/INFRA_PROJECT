@@ -1,0 +1,38 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'crypto-pipeline'
+
+# ─── Alerting Rules ──────────────────────────────────────────────────────────
+# Alert dikirim ke Grafana Alertmanager untuk notifikasi
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['grafana:3000']
+
+# ─── Rule Files ──────────────────────────────────────────────────────────────
+rule_files:
+  - "alert_rules.yml"
+
+# ─── Scrape Configs ──────────────────────────────────────────────────────────
+scrape_configs:
+
+  # Pipeline Health Check & Custom Metrics
+  - job_name: 'crypto-pipeline'
+    static_configs:
+      - targets: ['health-check:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Airflow metrics (melalui statsd-exporter atau airflow built-in)
+  - job_name: 'airflow'
+    static_configs:
+      - targets: ['airflow-webserver:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
