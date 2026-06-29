@@ -163,8 +163,8 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_ALERTING_ENABLED: "true"
-      GF_UNIFIED_ALERTING_ENABLED: "true"
+      GF_ALERTING_ENABLED: "false"         # Legacy alerting — dimatikan (konflik dengan unified)
+      GF_UNIFIED_ALERTING_ENABLED: "true"  # Unified Alerting (Grafana 9+)
       # Kirim alert via Telegram
       GF_SMTP_ENABLED: "false"
     volumes:
