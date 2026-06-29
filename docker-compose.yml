@@ -8,7 +8,7 @@ x-airflow-common: &airflow-common
   environment:
     CASSANDRA_HOST: cassandra
     CASSANDRA_PORT: 9042
-    SPARK_MASTER_URL: spark://spark-master:7077
+    SPARK_MASTER_URL: local[*]
   volumes:
     - ./dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
@@ -84,70 +84,24 @@ services:
       retries: 10
       start_period: 60s
 
-  # ============================================================
-  # SPARK MASTER — Node Master Spark (single-laptop mode)
-  # UI: http://localhost:8081
-  # ============================================================
-  spark-master:
-    image: bitnami/spark:3.4
-    container_name: crypto_spark_master
-    environment:
-      - SPARK_MODE=master
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_MASTER_PORT=7077
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-      - SPARK_SSL_ENABLED=no
-    ports:
-      - "7077:7077"
-      - "8081:8080"
-    volumes:
-      - ./src:/opt/bitnami/spark/src
-      - ./MODEL:/opt/bitnami/spark/MODEL
-      - ./DATA:/opt/bitnami/spark/DATA
 
   # ============================================================
-  # SPARK WORKER — Node Worker Spark (1 worker, single-laptop)
+  # BINANCE INGESTION — Streaming: Binance WS → Kafka (always-on)
   # ============================================================
-  spark-worker:
-    image: bitnami/spark:3.4
-    container_name: crypto_spark_worker
-    depends_on:
-      - spark-master
-    environment:
-      - SPARK_MODE=worker
-      - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_WORKER_CORES=2
-      - SPARK_RPC_AUTHENTICATION_ENABLED=no
-      - SPARK_RPC_ENCRYPTION_ENABLED=no
-    volumes:
-      - ./src:/opt/bitnami/spark/src
-      - ./MODEL:/opt/bitnami/spark/MODEL
-      - ./DATA:/opt/bitnami/spark/DATA
-
-  # ============================================================
-  # KAFKA CONSUMER — Streaming: Kafka → Cassandra (always-on)
-  # ============================================================
-  kafka-consumer:
+  binance-ingestion:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: crypto_kafka_consumer
+    container_name: crypto_binance_ingestion
     depends_on:
       kafka:
         condition: service_healthy
-      cassandra:
-        condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      CASSANDRA_HOST: cassandra
-      CASSANDRA_PORT: 9042
     volumes:
       - ./src:/opt/airflow/src
       - ./logs:/opt/airflow/logs_pipeline
-    command: python -m src.storage.kafka_to_cassandra
+    command: python -m src.ingestion.binance_ws_producer
     restart: always
 
   # ============================================================

@@ -36,26 +36,19 @@ with DAG(
 ) as dag:
 
     # ──────────────────────────────────────────────────────────────────────────
-    # TASK 1: Kafka Producer
-    # Menarik data OHLCV terbaru dari Yahoo Finance dan publish ke Kafka
+    # TASK 1: Kafka Consumer (Micro-batching)
+    # Mengambil semua pesan (data 1-detik) yang terakumulasi di Kafka 
+    # selama 1 jam terakhir, menyimpannya ke Cassandra, lalu exit.
     # ──────────────────────────────────────────────────────────────────────────
-    kafka_producer_task = BashOperator(
-        task_id="kafka_producer",
+    kafka_consumer_task = BashOperator(
+        task_id="kafka_consumer_batch",
         bash_command="""
             export CASSANDRA_HOST=cassandra
             export CASSANDRA_PORT=9042
             export KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-            cd /opt/airflow && python -m src.ingestion.kafka_producer
+            cd /opt/airflow && python -m src.storage.kafka_to_cassandra
         """,
-    )
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # TASK 2: Tunggu Consumer memproses data
-    # kafka-consumer service berjalan selalu. Ini hanya jeda sinkronisasi.
-    # ──────────────────────────────────────────────────────────────────────────
-    wait_for_consumer = BashOperator(
-        task_id="wait_for_consumer",
-        bash_command="echo '[*] Memberi jeda 15 detik agar Kafka Consumer selesai menulis ke Cassandra...' && sleep 15",
+        execution_timeout=timedelta(minutes=30),
     )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -128,4 +121,4 @@ sys.exit(0 if all_pass else 1)
     # ──────────────────────────────────────────────────────────────────────────
     # Dependency chain
     # ──────────────────────────────────────────────────────────────────────────
-    kafka_producer_task >> wait_for_consumer >> data_quality_task >> train_model_task >> scan_signals_task
+    kafka_consumer_task >> data_quality_task >> train_model_task >> scan_signals_task

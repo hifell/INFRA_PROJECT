@@ -80,7 +80,8 @@ def run_consumer():
         group_id=CONSUMER_GROUP,
         auto_offset_reset="earliest",
         enable_auto_commit=True,
-        value_deserializer=lambda v: json.loads(v.decode("utf-8"))
+        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+        consumer_timeout_ms=5000 # Keluar dari loop jika tidak ada pesan baru selama 5 detik
     )
 
     print("[*] Consumer berjalan. Menunggu pesan dari Kafka...\n")

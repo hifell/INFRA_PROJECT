@@ -19,13 +19,27 @@ class TradingDatabaseConnector:
         self.analyzer = CryptoSentimentAnalyzer()
 
     def _get_connection(self):
+        import socket
+        # Supabase mengembalikan alamat IPv6 yang tidak bisa dijangkau dari dalam Docker.
+        # Kita paksa resolusi ke IPv4 dengan mengambil AF_INET secara eksplisit.
+        try:
+            ipv4 = next(
+                info[4][0]
+                for info in socket.getaddrinfo(self.host, self.port, socket.AF_INET, socket.SOCK_STREAM)
+            )
+        except StopIteration:
+            ipv4 = self.host  # fallback ke hostname jika IPv4 tidak ditemukan
+
         return psycopg2.connect(
-            host=self.host,
+            host=ipv4,
             port=self.port,
             database=self.database,
             user=self.user,
-            password=self.password
+            password=self.password,
+            sslmode="require",
+            connect_timeout=10,
         )
+
 
     def insert_crypto_signal(self, token: str, price: float, probability: float, status: str, tp: float = None, sl: float = None):
         """
