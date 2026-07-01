@@ -27,9 +27,9 @@ def start_price_pipeline():
             # -----------------------------------------------------------------
             print("\n[STEP 1] Menyinkronkan data live ke Kafka & Cassandra...")
             try:
-                # Memanggil skrip kafka_producer.py secara independen
+                # Memanggil skrip binance_ws_producer.py secara independen
                 subprocess.run(
-                    [sys.executable, "-m", "src.ingestion.kafka_producer"],
+                    [sys.executable, "-m", "src.ingestion.binance_ws_producer"],
                     check=True
                 )
                 print("   [+] Sinkronisasi Kafka Producer selesai.")

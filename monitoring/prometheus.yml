@@ -15,24 +15,29 @@ alerting:
 rule_files:
   - "alert_rules.yml"
 
-# ─── Scrape Configs ──────────────────────────────────────────────────────────
 scrape_configs:
 
-  # Pipeline Health Check & Custom Metrics
-  - job_name: 'crypto-pipeline'
+  - job_name: "health-check"
+    metrics_path: /metrics
     static_configs:
-      - targets: ['health-check:8000']
-    metrics_path: '/metrics'
-    scrape_interval: 15s
+      - targets: ["health-check:8000"]
 
-  # Prometheus self-monitoring
-  - job_name: 'prometheus'
+  - job_name: "kafka-consumer"
+    metrics_path: /metrics
     static_configs:
-      - targets: ['localhost:9090']
+      - targets: ["kafka-consumer:8000"]
 
-  # Airflow metrics (melalui statsd-exporter atau airflow built-in)
-  - job_name: 'airflow'
+  - job_name: "binance-ingestion"
+    metrics_path: /metrics
     static_configs:
-      - targets: ['airflow-webserver:8080']
-    metrics_path: '/metrics'
-    scrape_interval: 30s
+      - targets: ["binance-ingestion:8000"]
+
+  - job_name: "airflow"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["statsd-exporter:9102"]
+
+  - job_name: "apache-spark"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8080", "host.docker.internal:8081"]

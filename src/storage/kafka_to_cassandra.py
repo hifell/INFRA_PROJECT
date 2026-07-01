@@ -16,6 +16,9 @@ from datetime import datetime
 
 from cassandra.cluster import Cluster
 from kafka import KafkaConsumer
+from prometheus_client import start_http_server, Counter
+from src.monitoring.metrics import cassandra_rows_total
+
 
 
 # Konfigurasi — single node (localhost)
@@ -80,48 +83,62 @@ def run_consumer():
         group_id=CONSUMER_GROUP,
         auto_offset_reset="earliest",
         enable_auto_commit=True,
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-        consumer_timeout_ms=5000 # Keluar dari loop jika tidak ada pesan baru selama 5 detik
+        value_deserializer=lambda v: json.loads(v.decode("utf-8"))
     )
 
     print("[*] Consumer berjalan. Menunggu pesan dari Kafka...\n")
 
     count = 0
     try:
-        for message in consumer:
-            data = message.value
-
+        while True:
             try:
-                token = data["token"]
-                dt = datetime.strptime(data["Datetime"], "%Y-%m-%d %H:%M:%S")
-                open_price = float(data["Open"])
-                high_price = float(data["High"])
-                low_price = float(data["Low"])
-                close_price = float(data["Close"])
-                volume = float(data["Volume"])
+                for message in consumer:
+                    data = message.value
 
-                session.execute(insert_stmt, (
-                    token, dt, open_price, high_price, low_price, close_price, volume
-                ))
-                count += 1
+                    try:
+                        token = data["token"]
+                        dt = datetime.strptime(data["Datetime"], "%Y-%m-%d %H:%M:%S")
+                        open_price = float(data["Open"])
+                        high_price = float(data["High"])
+                        low_price = float(data["Low"])
+                        close_price = float(data["Close"])
+                        volume = float(data["Volume"])
 
-                if count % 1000 == 0:
-                    print(f"    [+] {count} pesan berhasil disimpan ke Cassandra...")
+                        session.execute(insert_stmt, (
+                            token, dt, open_price, high_price, low_price, close_price, volume
+                        ))
+                        
+                        cassandra_rows_total.labels(token=token).inc()
+                        count += 1
 
-            except KeyError as e:
-                print(f"[!] Pesan memiliki field yang hilang: {e} — Data: {data}")
-            except ValueError as e:
-                print(f"[!] Gagal konversi tipe data: {e} — Data: {data}")
-            except Exception as e:
-                print(f"[!] Error saat insert ke Cassandra: {e}")
+                        if count % 1000 == 0:
+                            print(f"    [+] {count} pesan berhasil disimpan ke Cassandra...")
+
+                    except KeyError as e:
+                        print(f"[!] Pesan memiliki field yang hilang: {e} — Data: {data}")
+                    except ValueError as e:
+                        print(f"[!] Gagal konversi tipe data: {e} — Data: {data}")
+                    except Exception as e:
+                        print(f"[!] Error saat insert ke Cassandra: {e}")
+            except Exception as stream_err:
+                print(f"[!] Terjadi gangguan pada stream Kafka: {stream_err}. Mencoba kembali dalam 5 detik...")
+                import time
+                time.sleep(5)
 
     except KeyboardInterrupt:
         print(f"\n[!] Consumer dihentikan secara manual. Total {count} pesan telah disimpan.")
     finally:
-        consumer.close()
-        cluster.shutdown()
+        try:
+            consumer.close()
+        except:
+            pass
+        try:
+            cluster.shutdown()
+        except:
+            pass
         print("[+] Koneksi Kafka dan Cassandra ditutup.")
 
 
 if __name__ == "__main__":
+    start_http_server(8000)
     run_consumer()

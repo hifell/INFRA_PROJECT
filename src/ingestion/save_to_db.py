@@ -18,6 +18,18 @@ class TradingDatabaseConnector:
         # Inisialisasi objek analyzer dari file terpisah agar kode tetap modular
         self.analyzer = CryptoSentimentAnalyzer()
 
+        # Pastikan kolom cluster_label ada di PostgreSQL
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("ALTER TABLE v_crypto_signals ADD COLUMN IF NOT EXISTS cluster_label INTEGER;")
+            conn.commit()
+            cursor.close()
+            conn.close()
+            print("[DB SUCCESS] Kolom 'cluster_label' terverifikasi/ditambahkan ke PostgreSQL.")
+        except Exception as e:
+            print(f"[DB WARNING] Gagal memeriksa/menambahkan kolom cluster_label di PostgreSQL: {e}")
+
     def _get_connection(self):
         import socket
         # Supabase mengembalikan alamat IPv6 yang tidak bisa dijangkau dari dalam Docker.
@@ -41,22 +53,22 @@ class TradingDatabaseConnector:
         )
 
 
-    def insert_crypto_signal(self, token: str, price: float, probability: float, status: str, tp: float = None, sl: float = None):
+    def insert_crypto_signal(self, token: str, price: float, probability: float, status: str, tp: float = None, sl: float = None, cluster_label: int = None):
         """
         Memasukkan data harga berjalan dan simulasi status sinyal ke tabel v_crypto_signals
         """
         query = """
-            INSERT INTO v_crypto_signals (token, price, probability, signal_status, take_profit, stop_loss)
-            VALUES (%s, %s, %s, %s, %s, %s);
+            INSERT INTO v_crypto_signals (token, price, probability, signal_status, take_profit, stop_loss, cluster_label)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
         """
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
-            cursor.execute(query, (token, price, probability, status, tp, sl))
+            cursor.execute(query, (token, price, probability, status, tp, sl, cluster_label))
             conn.commit()
             cursor.close()
             conn.close()
-            print(f"[DB SUCCESS] Berhasil menyimpan harga terbaru {token}: ${price:.2f}")
+            print(f"[DB SUCCESS] Berhasil menyimpan harga terbaru {token}: ${price:.2f} (Cluster: {cluster_label})")
         except Exception as e:
             print(f"[DB ERROR] Gagal menyimpan data harga/sinyal: {str(e)}")
 

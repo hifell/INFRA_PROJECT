@@ -9,6 +9,10 @@ x-airflow-common: &airflow-common
     CASSANDRA_HOST: cassandra
     CASSANDRA_PORT: 9042
     SPARK_MASTER_URL: local[*]
+    AIRFLOW__METRICS__STATSD_ON: "true"
+    AIRFLOW__METRICS__STATSD_HOST: statsd-exporter
+    AIRFLOW__METRICS__STATSD_PORT: 9125
+    AIRFLOW__METRICS__STATSD_PREFIX: airflow
   volumes:
     - ./dags:/opt/airflow/dags
     - ./src:/opt/airflow/src
@@ -103,6 +107,29 @@ services:
       - ./logs:/opt/airflow/logs_pipeline
     command: python -m src.ingestion.binance_ws_producer
     restart: always
+    
+  # ============================================================
+  # KAFKA CONSUMER — Kafka → Cassandra
+  # ============================================================
+  kafka-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto_kafka_consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+    volumes:
+      - ./src:/opt/airflow/src
+      - ./logs:/opt/airflow/logs_pipeline
+    command: python -m src.storage.kafka_to_cassandra
+    restart: always
 
   # ============================================================
   # HEALTH CHECK SERVICE — Prometheus metrics exporter (port 8000)
@@ -137,6 +164,8 @@ services:
     container_name: crypto_prometheus
     ports:
       - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
@@ -146,6 +175,17 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=30d'
       - '--web.enable-lifecycle'
+    restart: always
+
+  # ============================================================
+  # STATSD EXPORTER — Bridge StatsD metrics from Airflow to Prometheus
+  # ============================================================
+  statsd-exporter:
+    image: prom/statsd-exporter:v0.24.0
+    container_name: crypto_statsd_exporter
+    ports:
+      - "9125:9125/udp"
+      - "9102:9102"
     restart: always
 
   # ============================================================
@@ -241,3 +281,6 @@ volumes:
   airflow_logs:
   prometheus_data:
   grafana_data:
+  
+  
+  

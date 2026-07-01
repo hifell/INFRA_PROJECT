@@ -13,6 +13,7 @@ if project_root not in sys.path:
 
 from pyspark.sql import SparkSession
 from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.clustering import KMeans
 import xgboost.spark as xgb_spark
 from cassandra.cluster import Cluster
 from src.features.feature_engineering import CryptoFeatureEngineer
@@ -181,6 +182,51 @@ def execute_model_training():
         booster.save_model(booster_path)
 
         print(f"[+] Model {token} berhasil diperbarui dan diekspor (Booster Only).")
+
+        # --- K-Means Clustering & Enrichment ---
+        try:
+            # Pastikan kolom cluster_label ada di Cassandra table
+            cass_session.execute('ALTER TABLE signals ADD cluster_label int;')
+            print(f"[+] Kolom 'cluster_label' terverifikasi/ditambahkan ke Cassandra table 'signals'.")
+        except Exception as e:
+            # Jika sudah ada, abaikan saja
+            pass
+
+        # Pilih kolom volatilitas untuk clustering
+        vol_cols = ["BTC_Vol_1h", "BTC_Vol_3h"]
+        
+        # Konversi subset df_processed ke Spark DataFrame untuk clustering
+        df_for_clustering = df_processed[["Datetime", "BTC_Vol_1h", "BTC_Vol_3h"]].copy()
+        
+        # Drop rows with NaN values to avoid PySpark errors
+        df_for_clustering = df_for_clustering.dropna().reset_index(drop=True)
+        
+        if not df_for_clustering.empty:
+            spark_clust_df = spark.createDataFrame(df_for_clustering)
+            
+            assembler_vol = VectorAssembler(inputCols=vol_cols, outputCol="vol_features")
+            assembled_df = assembler_vol.transform(spark_clust_df)
+            
+            # Buat model K-Means dengan k=3
+            kmeans_obj = KMeans(featuresCol="vol_features", predictionCol="cluster_label", k=3, seed=42)
+            model_kmeans = kmeans_obj.fit(assembled_df)
+            clustered_spark = model_kmeans.transform(assembled_df)
+            
+            # Ambil kembali hasilnya ke Pandas
+            clustered_pandas = clustered_spark.select("Datetime", "cluster_label").toPandas()
+            
+            # Gabungkan cluster_label kembali ke df_processed agar data ter-enrich
+            df_processed = df_processed.merge(clustered_pandas, on="Datetime", how="left")
+            
+            # Simpan hasil label cluster ke Cassandra database menggunakan cass_session (UPDATE query)
+            print(f"[*] Menyimpan cluster_label untuk {token} ke Cassandra...")
+            update_stmt = cass_session.prepare('UPDATE signals SET cluster_label = ? WHERE "token" = ? AND datetime = ?')
+            for _, row in clustered_pandas.iterrows():
+                dt_val = row["Datetime"].to_pydatetime() if hasattr(row["Datetime"], "to_pydatetime") else row["Datetime"]
+                cass_session.execute(update_stmt, (int(row["cluster_label"]), token, dt_val))
+            print(f"[+] Cluster_label untuk {token} berhasil disimpan ke Cassandra.")
+        else:
+            print(f"[!] Data volatilitas kosong untuk {token}, K-Means dilewati.")
 
     # --- Cleanup koneksi Cassandra ---
     cass_cluster.shutdown()

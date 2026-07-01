@@ -15,6 +15,10 @@ import logging.handlers
 from pathlib import Path
 from datetime import datetime
 
+# Map CRITICAL / FATAL level to FATAL for consistent severity level printing
+logging.addLevelName(logging.CRITICAL, "FATAL")
+logging.addLevelName(50, "FATAL")
+
 # ─── Konfigurasi ──────────────────────────────────────────────────────────────
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
@@ -35,6 +39,7 @@ COLORS = {
     "WARNING":  "\033[33m",   # Yellow
     "ERROR":    "\033[31m",   # Red
     "CRITICAL": "\033[35m",   # Magenta
+    "FATAL":    "\033[35m",   # Magenta
     "RESET":    "\033[0m",
 }
 

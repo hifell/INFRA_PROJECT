@@ -131,16 +131,35 @@ class TradingSignalCenter:
         # Kirim session ke engineer
         self.engineer.cassandra_session = session
 
+        # Check if cluster_label column exists in keyspace metadata
+        has_cluster_label = False
+        try:
+            ks_meta = cluster.metadata.keyspaces.get("crypto_ks")
+            if ks_meta:
+                table_meta = ks_meta.tables.get("signals")
+                if table_meta and "cluster_label" in table_meta.columns:
+                    has_cluster_label = True
+        except Exception:
+            pass
+
         print("\n" + "="*50)
         print(f"[*] MENJALANKAN SCANNER SINYAL TRADING ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
+        print(f"[*] Metadata 'cluster_label' terdeteksi di Cassandra: {has_cluster_label}")
         print("="*50)
 
         for token in tokens:
-            # Mengambil 50 baris terakhir (cukup untuk fitur EMA 50 dan BB)
-            query = f'SELECT datetime, open, high, low, close, volume FROM signals WHERE "token" = \'{token}\' ORDER BY datetime DESC LIMIT 100'
+            # Mengambil 100 baris terakhir (cukup untuk fitur EMA 50 dan BB)
+            if has_cluster_label:
+                query = f'SELECT datetime, open, high, low, close, volume, cluster_label FROM signals WHERE "token" = \'{token}\' ORDER BY datetime DESC LIMIT 100'
+            else:
+                query = f'SELECT datetime, open, high, low, close, volume FROM signals WHERE "token" = \'{token}\' ORDER BY datetime DESC LIMIT 100'
+                
             try:
                 rows = session.execute(query)
-                data = [{"Datetime": row.datetime, "Open": row.open, "High": row.high, "Low": row.low, "Close": row.close, "Volume": row.volume} for row in rows]
+                if has_cluster_label:
+                    data = [{"Datetime": row.datetime, "Open": row.open, "High": row.high, "Low": row.low, "Close": row.close, "Volume": row.volume, "cluster_label": getattr(row, "cluster_label", None)} for row in rows]
+                else:
+                    data = [{"Datetime": row.datetime, "Open": row.open, "High": row.high, "Low": row.low, "Close": row.close, "Volume": row.volume} for row in rows]
                 df_raw = pd.DataFrame(data)
                 if not df_raw.empty:
                     df_raw["Datetime"] = pd.to_datetime(df_raw["Datetime"])
@@ -160,6 +179,10 @@ class TradingSignalCenter:
             latest_row = df_features.iloc[-1]
             current_price = float(latest_row["Close"])
             current_time = latest_row["Datetime"]
+            
+            cluster_val = None
+            if "cluster_label" in latest_row and not pd.isna(latest_row["cluster_label"]):
+                cluster_val = int(latest_row["cluster_label"])
             
             prob = float(self.inference.predict_next_probability(df_features, token))
             threshold = self.confidence_thresholds.get(token, 0.52)
@@ -196,7 +219,8 @@ class TradingSignalCenter:
                     probability=round(prob * 100, 2),
                     status=status,
                     tp=tp_price,
-                    sl=sl_price
+                    sl=sl_price,
+                    cluster_label=cluster_val
                 )
             except Exception as e:
                 print(f"[!] Gagal menyimpan entri sinyal {token} ke database PostgreSQL: {str(e)}")

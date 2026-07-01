@@ -4,6 +4,11 @@ import asyncio
 import websockets
 from datetime import datetime
 from kafka import KafkaProducer
+from prometheus_client import start_http_server, Counter
+from src.monitoring.metrics import kafka_messages_total
+from prometheus_client import start_http_server
+
+
 
 # Configuration
 KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -20,56 +25,80 @@ def create_kafka_producer():
     )
     return producer
 
+
 async def binance_websocket():
-    producer = create_kafka_producer()
-    
-    # Create combined stream URL
-    streams = [f"{token.lower()}usdt@kline_1s" for token in TOKENS]
-    stream_url = "wss://stream.binance.com:9443/stream?streams=" + "/".join(streams)
-    
-    print(f"[*] Terhubung ke Binance WebSocket: {stream_url}")
-    
-    async for websocket in websockets.connect(stream_url):
-        try:
-            print("[+] WebSocket Terhubung. Menunggu data...")
-            async for message in websocket:
-                data = json.loads(message)
-                
-                # Payload combined stream ada di key "data"
-                if "data" in data and "k" in data["data"]:
-                    kline = data["data"]["k"]
-                    
-                    # Hanya proses jika candle sudah ditutup (is_closed = True)
-                    # Ini menjamin kita dapat persis 1 baris final per detik
-                    if kline["x"]:
-                        token_name = kline["s"].replace("USDT", "")
-                        # Convert timestamp ms ke string
-                        dt = datetime.utcfromtimestamp(kline["t"] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+    producer = None
+    try:
+        producer = create_kafka_producer()
+        
+        # Create combined stream URL
+        streams = [f"{token.lower()}usdt@kline_1s" for token in TOKENS]
+        stream_url = "wss://stream.binance.com:9443/stream?streams=" + "/".join(streams)
+        
+        print(f"[*] Terhubung ke Binance WebSocket: {stream_url}")
+        
+        while True:
+            try:
+                async with websockets.connect(stream_url) as websocket:
+                    print("[+] WebSocket Terhubung. Menunggu data...")
+                    async for message in websocket:
+                        data = json.loads(message)
                         
-                        payload = {
-                            "token": token_name,
-                            "Datetime": dt,
-                            "Open": float(kline["o"]),
-                            "High": float(kline["h"]),
-                            "Low": float(kline["l"]),
-                            "Close": float(kline["c"]),
-                            "Volume": float(kline["v"])
-                        }
-                        
-                        # Publish ke Kafka
-                        producer.send(KAFKA_TOPIC, key=token_name.encode("utf-8"), value=payload)
-                        print(f"[STREAM] {token_name} | {dt} | C: {payload['Close']}")
-                        
-        except websockets.ConnectionClosed:
-            print("[!] WebSocket terputus. Mencoba menghubungkan kembali dalam 5 detik...")
-            await asyncio.sleep(5)
-            continue
-        except Exception as e:
-            print(f"[!] Error: {str(e)}")
-            await asyncio.sleep(5)
+                        # Payload combined stream ada di key "data"
+                        if "data" in data and "k" in data["data"]:
+                            kline = data["data"]["k"]
+                            
+                            # Hanya proses jika candle sudah ditutup (is_closed = True)
+                            # Ini menjamin kita dapat persis 1 baris final per detik
+                            if kline["x"]:
+                                token_name = kline["s"].replace("USDT", "")
+                                # Convert timestamp ms ke string
+                                dt = datetime.utcfromtimestamp(kline["t"] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                                
+                                payload = {
+                                    "token": token_name,
+                                    "Datetime": dt,
+                                    "Open": float(kline["o"]),
+                                    "High": float(kline["h"]),
+                                    "Low": float(kline["l"]),
+                                    "Close": float(kline["c"]),
+                                    "Volume": float(kline["v"])
+                                }
+
+                                producer.send(
+                                    KAFKA_TOPIC,
+                                    key=token_name.encode("utf-8"),
+                                    value=payload
+                                )
+
+                                kafka_messages_total.labels(token=token_name).inc()
+
+                                print(f"[STREAM] {token_name} | {dt} | C: {payload['Close']}")
+            except (websockets.ConnectionClosed, OSError) as e:
+                print(f"[!] WebSocket terputus ({e}). Mencoba menghubungkan kembali dalam 5 detik...")
+                await asyncio.sleep(5)
+            except Exception as e:
+                print(f"[!] Terjadi kesalahan: {str(e)}. Mencoba menghubungkan kembali dalam 5 detik...")
+                await asyncio.sleep(5)
+    except asyncio.CancelledError:
+        print("[!] Task WebSocket dibatalkan.")
+    finally:
+        if producer:
+            try:
+                producer.flush()
+                producer.close()
+                print("[+] Koneksi Kafka Producer ditutup.")
+            except:
+                pass
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("[*] BINANCE WEBSOCKET PRODUCER: 1-SECOND CANDLES")
     print("=" * 60)
-    asyncio.run(binance_websocket())
+
+    start_http_server(8000)   # ✅ FIX INI WAJIB
+
+    try:
+        asyncio.run(binance_websocket())
+    except KeyboardInterrupt:
+        print("\n[!] Program dihentikan secara manual.")
