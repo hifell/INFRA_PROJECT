@@ -27,8 +27,8 @@ class TradingDatabaseConnector:
                 info[4][0]
                 for info in socket.getaddrinfo(self.host, self.port, socket.AF_INET, socket.SOCK_STREAM)
             )
-        except StopIteration:
-            ipv4 = self.host  # fallback ke hostname jika IPv4 tidak ditemukan
+        except Exception:
+            ipv4 = self.host  # fallback ke hostname jika IPv4 tidak ditemukan atau socket error
 
         return psycopg2.connect(
             host=ipv4,
