@@ -1,11 +1,11 @@
 """
-Kafka Consumer → Cassandra Writer.
+Kafka Consumer → Cassandra Writer (Streaming + 1-Hour Aggregation)
 
 Script ini bertugas:
-1. Membaca pesan secara streaming dari topik Kafka 'crypto_signals'.
-2. Menyimpan setiap record OHLCV ke tabel Cassandra 'crypto_ks.signals'.
-3. Cassandra melakukan upsert otomatis berdasarkan Primary Key (token, Datetime),
-   sehingga tidak perlu pengecekan duplikat manual.
+1. Membaca pesan 1-detik secara streaming dari topik Kafka 'crypto_signals'.
+2. Mengagregasi data tersebut menjadi lilin (candle) 1-jam secara real-time.
+3. Melakukan upsert (timpa data) ke Cassandra 'crypto_ks.signals' agar 
+   ML dan Dasbor selalu memiliki agregat 1-jam paling terbaru.
 
 Script ini dirancang untuk berjalan terus-menerus (long-running process).
 """
@@ -27,9 +27,6 @@ CONSUMER_GROUP = "cassandra_writer_group"
 
 
 def setup_cassandra():
-    """
-    Menghubungkan ke Cassandra dan memastikan Keyspace serta Tabel sudah ada.
-    """
     print(f"[*] Menghubungkan ke Cassandra ({CASSANDRA_HOST}:{CASSANDRA_PORT})...")
     cluster = Cluster([CASSANDRA_HOST], port=CASSANDRA_PORT)
     session = cluster.connect()
@@ -61,7 +58,7 @@ def setup_cassandra():
 
 def run_consumer():
     print("\n" + "=" * 60)
-    print("[*] KAFKA CONSUMER: STREAMING DATA KE CASSANDRA")
+    print("[*] KAFKA CONSUMER: STREAMING & 1-HOUR AGGREGATION")
     print("=" * 60)
 
     cluster, session = setup_cassandra()
@@ -74,19 +71,23 @@ def run_consumer():
 
     print(f"[*] Menghubungkan ke Kafka ({KAFKA_BOOTSTRAP_SERVERS})...")
     print(f"[*] Subscribing topik: '{KAFKA_TOPIC}', Consumer Group: '{CONSUMER_GROUP}'")
+    
+    # Hapus consumer_timeout_ms agar script berjalan tanpa batas waktu (True Stream)
     consumer = KafkaConsumer(
         KAFKA_TOPIC,
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         group_id=CONSUMER_GROUP,
         auto_offset_reset="earliest",
         enable_auto_commit=True,
-        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-        consumer_timeout_ms=5000 # Keluar dari loop jika tidak ada pesan baru selama 5 detik
+        value_deserializer=lambda v: json.loads(v.decode("utf-8"))
     )
 
-    print("[*] Consumer berjalan. Menunggu pesan dari Kafka...\n")
+    print("[*] Consumer berjalan. Menunggu pesan real-time dari Kafka...\n")
 
     count = 0
+    # State untuk melacak agregasi per token untuk jam saat ini
+    aggregation_state = {}
+
     try:
         for message in consumer:
             data = message.value
@@ -94,19 +95,45 @@ def run_consumer():
             try:
                 token = data["token"]
                 dt = datetime.strptime(data["Datetime"], "%Y-%m-%d %H:%M:%S")
+                # Normalisasi ke awal jam (misal 10:45:12 menjadi 10:00:00)
+                hour_start = dt.replace(minute=0, second=0, microsecond=0)
+                
                 open_price = float(data["Open"])
                 high_price = float(data["High"])
                 low_price = float(data["Low"])
                 close_price = float(data["Close"])
                 volume = float(data["Volume"])
 
-                session.execute(insert_stmt, (
-                    token, dt, open_price, high_price, low_price, close_price, volume
-                ))
-                count += 1
+                # Inisialisasi state jika token baru atau jam berubah
+                if token not in aggregation_state or aggregation_state[token]['hour_start'] != hour_start:
+                    aggregation_state[token] = {
+                        'hour_start': hour_start,
+                        'open': open_price,
+                        'high': high_price,
+                        'low': low_price,
+                        'close': close_price,
+                        'volume': volume
+                    }
+                else:
+                    # Update agregasi 1-jam dengan data detik terbaru
+                    current_state = aggregation_state[token]
+                    current_state['high'] = max(current_state['high'], high_price)
+                    current_state['low'] = min(current_state['low'], low_price)
+                    current_state['close'] = close_price  # Harga terakhir di jam tersebut
+                    current_state['volume'] += volume
 
+                # Lakukan UPSERT langsung ke Cassandra
+                # Cassandra menggunakan Primary Key ("token", datetime), 
+                # sehingga data pada jam yang sama akan ditimpa (di-update) dengan agregat terbaru.
+                state = aggregation_state[token]
+                session.execute(insert_stmt, (
+                    token, state['hour_start'], state['open'], state['high'],
+                    state['low'], state['close'], state['volume']
+                ))
+                
+                count += 1
                 if count % 1000 == 0:
-                    print(f"    [+] {count} pesan berhasil disimpan ke Cassandra...")
+                    print(f"    [+] {count} data 1-detik telah diserap & diagregasi ke Cassandra...")
 
             except KeyError as e:
                 print(f"[!] Pesan memiliki field yang hilang: {e} — Data: {data}")
@@ -116,7 +143,7 @@ def run_consumer():
                 print(f"[!] Error saat insert ke Cassandra: {e}")
 
     except KeyboardInterrupt:
-        print(f"\n[!] Consumer dihentikan secara manual. Total {count} pesan telah disimpan.")
+        print(f"\n[!] Consumer dihentikan secara manual. Total {count} pesan diproses.")
     finally:
         consumer.close()
         cluster.shutdown()

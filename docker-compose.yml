@@ -98,10 +98,35 @@ services:
         condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      PYTHONUNBUFFERED: '1'
     volumes:
       - ./src:/opt/airflow/src
       - ./logs:/opt/airflow/logs_pipeline
-    command: python -m src.ingestion.binance_ws_producer
+    command: python -u -m src.ingestion.binance_ws_producer
+    restart: always
+
+  # ============================================================
+  # KAFKA CONSUMER — Streaming: Kafka → Aggregate 1-Hour → Cassandra
+  # ============================================================
+  kafka-consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto_kafka_consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_PORT: 9042
+      PYTHONUNBUFFERED: '1'
+    volumes:
+      - ./src:/opt/airflow/src
+      - ./logs:/opt/airflow/logs_pipeline
+    command: python -u -m src.storage.kafka_to_cassandra
     restart: always
 
   # ============================================================

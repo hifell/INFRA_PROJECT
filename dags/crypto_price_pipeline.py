@@ -3,11 +3,13 @@ DAG: Pipeline Harga Crypto (Stream + ML)
 Jadwal: Setiap 1 jam
 
 Flow:
-  1. Kafka Producer  → Tarik OHLCV terbaru dari Yahoo Finance, publish ke Kafka
-  2. Wait Consumer   → Beri jeda agar Consumer selesai tulis ke Cassandra
-  3. Data Quality    → Validasi kualitas data sebelum training
-  4. Train Model     → Latih ulang XGBoost via Spark (local[*] mode, single-laptop)
-  5. Scan Signals    → Inferensi XGBoost → simpan ke PostgreSQL + alert Grafana
+  1. Kafka Stream Check → Verifikasi Kafka Consumer daemon aktif & data mengalir ke Cassandra
+  2. Data Quality       → Validasi kualitas data sebelum training
+  3. Train Model        → Latih ulang XGBoost via Spark (local[*] mode, single-laptop)
+  4. Scan Signals       → Inferensi XGBoost → simpan ke PostgreSQL + alert Grafana
+
+Note: Binance WS Producer dan Kafka Consumer berjalan sebagai service daemon terpisah
+      (always-on stream processing). DAG ini hanya memvalidasi dan memproses hasilnya.
 """
 
 from datetime import datetime, timedelta
@@ -36,19 +38,19 @@ with DAG(
 ) as dag:
 
     # ──────────────────────────────────────────────────────────────────────────
-    # TASK 1: Kafka Consumer (Micro-batching)
-    # Mengambil semua pesan (data 1-detik) yang terakumulasi di Kafka 
-    # selama 1 jam terakhir, menyimpannya ke Cassandra, lalu exit.
+    # TASK 1: Kafka Stream Ingestion Check
+    # Memverifikasi bahwa Kafka Consumer daemon sedang aktif dan data OHLCV
+    # sudah berhasil mengalir masuk ke Cassandra sebelum pipeline dilanjutkan.
     # ──────────────────────────────────────────────────────────────────────────
-    kafka_consumer_task = BashOperator(
-        task_id="kafka_consumer_batch",
+    kafka_stream_check_task = BashOperator(
+        task_id="kafka_stream_check",
         bash_command="""
             export CASSANDRA_HOST=cassandra
             export CASSANDRA_PORT=9042
             export KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-            cd /opt/airflow && python -m src.storage.kafka_to_cassandra
+            cd /opt/airflow && python -m src.checks.kafka_stream_check
         """,
-        execution_timeout=timedelta(minutes=30),
+        execution_timeout=timedelta(minutes=5),
     )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -121,4 +123,4 @@ sys.exit(0 if all_pass else 1)
     # ──────────────────────────────────────────────────────────────────────────
     # Dependency chain
     # ──────────────────────────────────────────────────────────────────────────
-    kafka_consumer_task >> data_quality_task >> train_model_task >> scan_signals_task
+    kafka_stream_check_task >> data_quality_task >> train_model_task >> scan_signals_task
