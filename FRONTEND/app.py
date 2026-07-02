@@ -44,6 +44,8 @@ DB_USER     = os.environ.get("DB_USER", "postgres")
 DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
 
 CASSANDRA_HOST = os.environ.get("CASSANDRA_HOST", "localhost")
+if CASSANDRA_HOST == "cassandra":
+    CASSANDRA_HOST = "localhost"
 CASSANDRA_PORT = int(os.environ.get("CASSANDRA_PORT", 9042))
 
 # ─── CSS Kustom ───────────────────────────────────────────────────────────────
