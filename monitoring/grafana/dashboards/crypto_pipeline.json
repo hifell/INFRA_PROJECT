@@ -1,33 +1,60 @@
 {
   "title": "Crypto Pipeline Monitoring",
   "uid": "crypto-pipeline-main",
-  "version": 1,
+  "version": 3,
   "schemaVersion": 38,
   "refresh": "15s",
-  "tags": ["crypto", "pipeline", "monitoring"],
-  "time": {"from": "now-1h", "to": "now"},
+  "tags": [
+    "crypto",
+    "pipeline",
+    "monitoring"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "title": "📊 Cassandra Rows per Token",
       "type": "bargauge",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "options": {
         "orientation": "horizontal",
-        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "displayMode": "gradient",
         "minVizHeight": 10,
         "minVizWidth": 0
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "red", "value": 0},
-              {"color": "yellow", "value": 100},
-              {"color": "green", "value": 1000}
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 100
+              },
+              {
+                "color": "green",
+                "value": 1000
+              }
             ]
           },
           "unit": "short",
@@ -36,7 +63,10 @@
       },
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "pipeline_cassandra_rows_total",
           "legendFormat": "{{token}}"
         }
@@ -46,28 +76,52 @@
       "id": 2,
       "title": "🚨 Pipeline Errors (rate/5m)",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "green", "value": 0},
-              {"color": "red", "value": 0.1}
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 0.1
+              }
             ]
           },
           "unit": "ops",
-          "custom": {"lineWidth": 2, "fillOpacity": 10}
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
         }
       },
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "rate(pipeline_errors_total[5m])",
           "legendFormat": "{{component}} - {{error_type}}"
         }
@@ -76,10 +130,26 @@
         "name": "High Error Rate Alert",
         "conditions": [
           {
-            "evaluator": {"params": [0.5], "type": "gt"},
-            "operator": {"type": "and"},
-            "query": {"params": ["A", "5m", "now"]},
-            "reducer": {"params": [], "type": "avg"},
+            "evaluator": {
+              "params": [
+                0.5
+              ],
+              "type": "gt"
+            },
+            "operator": {
+              "type": "and"
+            },
+            "query": {
+              "params": [
+                "A",
+                "5m",
+                "now"
+              ]
+            },
+            "reducer": {
+              "params": [],
+              "type": "avg"
+            },
             "type": "query"
           }
         ],
@@ -96,20 +166,34 @@
       "id": 3,
       "title": "🎯 Sinyal Trading Terdeteksi (Total)",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
       "options": {
-        "reduceOptions": {"calcs": ["sum"]},
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
         "colorMode": "background",
         "graphMode": "none",
         "justifyMode": "center"
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "blue", "value": 0}
+              {
+                "color": "blue",
+                "value": 0
+              }
             ]
           },
           "unit": "short",
@@ -118,8 +202,110 @@
       },
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
           "expr": "sum(pipeline_signal_count_total{signal_type=\"LONG\"})"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "📬 Alert Terkirim (Total)",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          },
+          "unit": "short",
+          "displayName": "Alert Terkirim"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(pipeline_alert_sent_total)"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "📈 Airflow Log Severity",
+      "type": "piechart",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "pieType": "pie",
+        "displayLabels": [
+          "name"
+        ],
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(airflow_task_logging_info)",
+          "legendFormat": "INFO",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(airflow_task_logging_warning)",
+          "legendFormat": "WARNING",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(airflow_task_logging_error)",
+          "legendFormat": "FATAL/ERROR",
+          "refId": "C"
         }
       ]
     },
@@ -127,22 +313,42 @@
       "id": 4,
       "title": "📡 Data Quality Score per Token",
       "type": "gauge",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
       "options": {
-        "reduceOptions": {"calcs": ["lastNotNull"]},
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
         "orientation": "auto",
         "showThresholdLabels": true,
         "showThresholdMarkers": true
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "thresholds"},
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              {"color": "red", "value": 0},
-              {"color": "yellow", "value": 80},
-              {"color": "green", "value": 95}
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "green",
+                "value": 95
+              }
             ]
           },
           "min": 0,
@@ -153,9 +359,11 @@
       },
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "pipeline_data_quality_score",
-          "legendFormat": "{{token}}"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "pipeline_data_quality_score"
         }
       ]
     },
@@ -163,53 +371,133 @@
       "id": 5,
       "title": "⏱️ Durasi Training Model (detik)",
       "type": "timeseries",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
       "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "palette-classic"},
+          "color": {
+            "mode": "palette-classic"
+          },
           "unit": "s",
-          "custom": {"lineWidth": 2}
+          "custom": {
+            "lineWidth": 2
+          }
         }
       },
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "pipeline_model_train_duration_seconds",
-          "legendFormat": "{{token}}"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "pipeline_model_train_duration_seconds"
         }
       ]
     },
     {
-      "id": 6,
-      "title": "📬 Alert Terkirim (Total)",
+      "id": 8,
+      "title": "🔍 Data Quality: Null Rows Detected",
       "type": "stat",
-      "gridPos": {"h": 4, "w": 6, "x": 6, "y": 8},
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 20
+      },
       "options": {
-        "reduceOptions": {"calcs": ["sum"]},
-        "colorMode": "background",
-        "graphMode": "none"
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
       },
       "fieldConfig": {
         "defaults": {
-          "color": {"mode": "fixed", "fixedColor": "orange"},
-          "unit": "short",
-          "displayName": "Alert Terkirim"
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
         }
       },
       "targets": [
         {
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "sum(pipeline_alert_sent_total)"
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_data_quality_null_rows",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "⚙️ Data Quality: Malformed Types",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 20
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "pipeline_data_quality_malformed_types",
+          "format": "time_series",
+          "refId": "A"
         }
       ]
     }
   ],
-  "templating": {"list": []},
-  "annotations": {"list": []},
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
   "links": [
     {
       "title": "Airflow UI",
